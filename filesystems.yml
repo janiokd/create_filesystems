@@ -1,0 +1,116 @@
+---
+- name: Create logical volumes and filesystems
+  hosts: all
+  become: yes
+  vars:
+    datavg: datavg
+    logvg: logvg
+    rootvg: rootvg
+    mongodblv: mongodblv
+    datalv: datalv
+    datajournallv: datajournallv
+    datatmplv: datatmplv
+    db1lv: db1lv
+    loglv: loglv
+    mongod_user: mongod
+    mongod_group: mongod
+    mongod_user_ulimit: "nofile 64000"
+    mongod_group_ulimit: "nofile 64000"
+    swappiness: 1
+  tasks:
+  - name: Create logical volume on rootvg called mongodblv
+    lvg: 
+      vg: "{{ rootvg }}" 
+      lv: "{{ mongodblv }}"
+      size: 10G
+  - name: Create logical volume on datavg called datalv
+    lvg: 
+      vg: "{{ datavg }}" 
+      lv: "{{ datalv }}"
+      size: 10G
+  - name: Create logical volume on datavg called datajournallv
+    lvg: 
+      vg: "{{ datavg }}" 
+      lv: "{{ datajournallv }}"
+      size: 10G
+  - name: Create logical volume on datavg called datatmplv
+    lvg: 
+      vg: "{{ datavg }}" 
+      lv: "{{ datatmplv }}"
+      size: 15G
+  - name: Create logical volume on datavg called db1lv
+    lvg: 
+      vg: "{{ datavg }}" 
+      lv: "{{ db1lv }}"
+      size: 20G
+  - name: Create logical volume on logvg called loglv
+    lvg: 
+      vg: "{{ logvg }}" 
+      lv: "{{ loglv }}"
+      size: 10G
+  - name: Create filesystem /opt/mongodb using mongodblv size 10GB
+    filesystem: 
+      fstype: xfs
+      dev: /dev/{{ rootvg }}/{{ mongodblv }}
+      opts: "-m crc=0 -n ftype=1"
+  - name: Create filesystem /data/mgo using datalv size 10 GB
+    filesystem: 
+      fstype: xfs
+      dev: /dev/{{ datavg }}/{{ datalv }}
+      opts: "-m crc=0 -n ftype=1"
+  - name: Create filesystem /data/mgo/journal using datajournallv size 10 GB
+    filesystem: 
+      fstype: xfs
+      dev: /dev/{{ datavg }}/{{ datajournallv }}
+      opts: "-m crc=0 -n ftype=1"
+  - name: Create filesystem /data/mgo/tmp using datatmplv size 15 GB
+
+  - name: Create filesystem /data/mgo/db1 using db1lv size 20 GB
+    filesystem: 
+      fstype: xfs
+      dev: /dev/{{ datavg }}/{{ db1lv }}
+      opts: "-m crc=0 -n ftype=1"
+  - name: Create filesystem /log/mgo using loglv size 10 GB
+    filesystem: 
+      fstype: xfs
+      dev: /dev/{{ logvg }}/{{ loglv }}
+      opts: "-m crc=0 -n ftype=1"
+  - name: Change permission of all those filesystem for user and group mongod:mongod
+    file:
+      path:
+        - /opt/mongodb
+        - /data/mgo
+        - /data/mgo/journal
+        - /data/mgo/tmp
+        - /data/mgo/db1
+        - /log/mgo
+      owner: "{{ mongod_user }}"
+      group: "{{ mongod_group }}"
+  - name: Set ulimit for user mongod, all options unlimited and -n 64000 and -u 64000
+    lineinfile:
+      path: /etc/security/limits.conf
+      line: "{{ mongod_user }} soft nofile {{ mongod_user_ulimit }}"
+      state: present
+    lineinfile:
+      path: /etc/security/limits.conf
+      line: "{{ mongod_user }} hard nofile {{ mongod_user_ulimit }}"
+      state: present
+  - name: Disable access time updates on /data/mgo/journal, /data/mgo/ and /data/mgo/db1
+    mount:
+      path:
+        - /data/mgo/journal
+        - /data/mgo/
+        - /data/mgo/db1
+      opts: "noatime"
+  - name: Disable transparent hugepages
+    sysctl:
+      name: vm.transparent_hugepage
+      value: never
+  - name: Set vm.swappiness to 1
+    sysctl:
+      name: vm.swappiness
+      value: "{{ swappiness }}"
+  - name: Update glibc
+    yum:
+      name: glibc
+      state: latest
