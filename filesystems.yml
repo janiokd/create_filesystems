@@ -18,6 +18,8 @@
     mongod_group_ulimit: "nofile 64000"
     swappiness: 1
   tasks:
+
+  #Create all Logical Volumes
   - name: Create logical volume on rootvg called mongodblv
     lvg: 
       vg: "{{ rootvg }}" 
@@ -48,33 +50,65 @@
       vg: "{{ logvg }}" 
       lv: "{{ loglv }}"
       size: 10G
-  - name: Create filesystem /opt/mongodb using mongodblv size 10GB
+
+
+  #Create filesystems and mount them
+  - name: Create and mount filesystem /opt/mongodb using mongodblv
     filesystem: 
       fstype: xfs
       dev: /dev/{{ rootvg }}/{{ mongodblv }}
       opts: "-m crc=0 -n ftype=1"
-  - name: Create filesystem /data/mgo using datalv size 10 GB
+    mount:
+      path: /opt/mongodb
+      src: /dev/{{ rootvg }}/{{ mongodblv }}
+      fstype: xfs
+      opts: defaults,noatime
+  
+  - name: Create and mount filesystem /data/mgo using datalv
     filesystem: 
       fstype: xfs
       dev: /dev/{{ datavg }}/{{ datalv }}
       opts: "-m crc=0 -n ftype=1"
-  - name: Create filesystem /data/mgo/journal using datajournallv size 10 GB
+    mount:
+      path: /data/mgo
+      src: /dev/{{ datavg }}/{{ datalv }}
+      fstype: xfs
+      opts: defaults,noatime
+  
+  - name: Create and mount filesystem /data/mgo/journal using datajournallv
     filesystem: 
       fstype: xfs
       dev: /dev/{{ datavg }}/{{ datajournallv }}
       opts: "-m crc=0 -n ftype=1"
-  - name: Create filesystem /data/mgo/tmp using datatmplv size 15 GB
-
-  - name: Create filesystem /data/mgo/db1 using db1lv size 20 GB
+    mount:
+      path: /data/mgo/journal
+      src: /dev/{{ datavg }}/{{ datajournallv }}
+      fstype: xfs
+      opts: defaults,noatime
+  
+  - name: Create and mount filesystem /data/mgo/tmp using datatmplv
+    filesystem: 
+      fstype: xfs
+      dev: /dev/{{ datavg }}/{{ datatmplv }}
+      opts: "-m crc=0 -n ftype=1"
+    mount:
+      path: /data/mgo/tmp
+      src: /dev/{{ datavg }}/{{ datatmplv }}
+      fstype: xfs
+      opts: defaults,noatime
+  
+  - name: Create and mount filesystem /data/mgo/db1 using db1lv
     filesystem: 
       fstype: xfs
       dev: /dev/{{ datavg }}/{{ db1lv }}
       opts: "-m crc=0 -n ftype=1"
-  - name: Create filesystem /log/mgo using loglv size 10 GB
-    filesystem: 
+    mount:
+      path: /data/mgo/db1
+      src: /dev/{{ datavg }}/{{ db1lv }}
       fstype: xfs
-      dev: /dev/{{ logvg }}/{{ loglv }}
-      opts: "-m crc=0 -n ftype=1"
+      opts: defaults,noatime
+
+  # Set permission for filesystems for mongodb user
   - name: Change permission of all those filesystem for user and group mongod:mongod
     file:
       path:
@@ -86,6 +120,8 @@
         - /log/mgo
       owner: "{{ mongod_user }}"
       group: "{{ mongod_group }}"
+
+  #Set ulimit for Mongodb User    
   - name: Set ulimit for user mongod, all options unlimited and -n 64000 and -u 64000
     lineinfile:
       path: /etc/security/limits.conf
@@ -95,6 +131,8 @@
       path: /etc/security/limits.conf
       line: "{{ mongod_user }} hard nofile {{ mongod_user_ulimit }}"
       state: present
+  
+  #Disable Access time on data filesystems
   - name: Disable access time updates on /data/mgo/journal, /data/mgo/ and /data/mgo/db1
     mount:
       path:
@@ -102,35 +140,21 @@
         - /data/mgo/
         - /data/mgo/db1
       opts: "noatime"
+
+  #Disable transparent HugePages - Performance Issue    
   - name: Disable transparent hugepages
     sysctl:
       name: vm.transparent_hugepage
       value: never
+
+  #Allows to swap only if a out of memory problem happens     
   - name: Set vm.swappiness to 1
     sysctl:
       name: vm.swappiness
       value: "{{ swappiness }}"
+
+  #Update System C Library used by Mongodb
   - name: Update glibc
     yum:
       name: glibc
       state: latest
-
-- name: Set ulimit for user mongod
-    ulimit:
-      name: mongod
-      soft:
-        - n: 64000
-        - u: 64000
-        - f: unlimited
-        - t: unlimited
-        - v: unlimited
-        - l: unlimited
-        - m: unlimited
-      hard:
-        - n: 64000
-        - u: 64000
-        - f: unlimited
-        - t: unlimited
-        - v: unlimited
-        - l: unlimited
-        - m: unlimited
