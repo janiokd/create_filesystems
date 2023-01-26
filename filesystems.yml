@@ -114,3 +114,23 @@
     yum:
       name: glibc
       state: latest
+
+- name: Set ulimit for user mongod
+    ulimit:
+      name: mongod
+      soft:
+        - n: 64000
+        - u: 64000
+        - f: unlimited
+        - t: unlimited
+        - v: unlimited
+        - l: unlimited
+        - m: unlimited
+      hard:
+        - n: 64000
+        - u: 64000
+        - f: unlimited
+        - t: unlimited
+        - v: unlimited
+        - l: unlimited
+        - m: unlimited
