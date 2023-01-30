@@ -1,0 +1,44 @@
+
+---
+- name: Install MongoDB Replica Set
+  hosts: mongodb_nodes
+  become: true
+  vars:
+    mongodb_version: 5.0
+    replica_set_name: rs0
+    mongodb_nodes:
+      - mongo1
+      - mongo2
+      - mongo3
+  tasks:
+  - name: Add MongoDB yum repository
+    yum_repository:
+      name: MongoDB
+      description: MongoDB Repository
+      baseurl: https://repo.mongodb.org/yum/redhat/$releasever/mongodb-org/{{ mongodb_version }}/x86_64/
+      gpgcheck: yes
+      enabled: yes
+  - name: Install MongoDB package
+    yum:
+      name: mongodb-org
+      state: present
+      version: {{ mongodb_version }}-1
+  - name: Create MongoDB data directory
+    file:
+      path: /data/db
+      state: directory
+  - name: Start MongoDB service
+    service:
+      name: mongod
+      state: started
+      enabled: yes
+  - name: Configure Replica Set
+    command: mongo --host {{ inventory_hostname }} --eval "rs.initiate({ _id: '{{ replica_set_name }}', members: [ { _id: 0, host: '{{ inventory_hostname }}:27017' } ] })"
+    when: inventory_hostname in mongodb_nodes
+  - name: Add Replica Set Members
+    command: mongo --host {{ inventory_hostname }} --eval "rs.add({ host: '{{ item }}:27017', priority: 1, votes: 1 })"
+    with_items: "{{ mongodb_nodes }}"
+    when: inventory_hostname in mongodb_nodes
+  - name: Wait for Replica Set to be ready
+    command: mongo --host {{ inventory_hostname }} --eval "while (rs.status().hasOwnProperty('myState') && rs.status().myState != 1) { print(rs.status().myState); sleep(1000); }"
+    when: inventory_hostname in mongodb_nodes
