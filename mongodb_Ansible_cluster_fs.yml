@@ -1,0 +1,549 @@
+# MongoDB Machines
+
+### MongoDB Cluster
+
+```sh
+for VMID in {141..143}; do qm stop $VMID ; qm destroy $VMID ; done ; qmr
+```
+
+CentOS VM
+
+```sh
+ID=1
+for VMID in {141..143};
+do
+  sh ~/deploylnx.sh $VMID mongodb0${ID} 130
+  let ID++
+  qm start ${VMID}
+done
+
+```
+
+Make sure that ssh-key is copied between all the servers
+
+```sh
+for VMID in {141..143}; do sh ~/deploylnx_fix.sh ${VMID} centos ; done
+
+# for VMID in {141..143}; do ssh -q centos@192.168.1.${VMID} "sudo cp ~/.ssh/authorized_keys /root/.ssh/authorized_keys" ; done
+
+```
+
+```sh
+ssh-keygen -f "/root/.ssh/known_hosts" -R "192.168.1.141"
+ssh 192.168.1.141 -q "hostnamectl set-hostname mongodb01"
+ssh 192.168.1.141 -q "hostnamectl"
+
+
+ssh-keygen -f "/root/.ssh/known_hosts" -R "192.168.1.142"
+ssh 192.168.1.142 -q "hostnamectl set-hostname mongodb02"
+ssh 192.168.1.142 -q "hostnamectl"
+
+ssh-keygen -f "/root/.ssh/known_hosts" -R "192.168.1.143"
+ssh 192.168.1.143 -q "hostnamectl set-hostname mongodb03"
+ssh 192.168.1.143 -q "hostnamectl"
+
+```
+
+Add extra disk
+
+```sh
+for VMID in {141..143}; do qm stop $VMID ; done ; qmr
+
+for VMID in {141..143}; do qm start $VMID ; done ; qmr
+
+```
+
+
+
+```sh
+# for VMID in {142..143};
+# do
+# qm stop ${VMID}
+# touch /var/lib/vz/images/${VMID}/vm-${VMID}-disk-1.qcow2
+# cp ~/link_config_of_VMs/${VMID}.conf ~/link_config_of_VMs/${VMID}.backup
+# sed -i "/size=8G/a\\
+# scsi1: local:${VMID}/vm-${VMID}-disk-1.qcow2,backup=0,size=32G,ssd=1" ~/link_config_of_VMs/${VMID}.conf
+# qm start ${VMID}
+# done
+# 
+# # Restore
+# restore_files(){
+# for VMID in {142..143};
+# do
+# qm stop ${VMID}
+# cp ~/link_config_of_VMs/${VMID}.backup ~/link_config_of_VMs/${VMID}.conf
+# done
+# }
+
+```
+
+
+
+##### Adicionar disco de 20GB nas 3 máquinas pelo hyper-v
+
+```sh
+[root@mongodb01 ~]# lsblk
+NAME   MAJ:MIN RM SIZE RO TYPE MOUNTPOINT
+sda      8:0    0   8G  0 disk
+└─sda1   8:1    0   8G  0 part /
+sdb      8:16   0  20G  0 disk
+sr0     11:0    1   4M  0 rom
+```
+
+### Ansible VM
+
+```sh
+VMID=140
+
+sh ~/deploylnx.sh $VMID FedorAnsible 130
+
+sh ~/deploylnx_fix.sh ${VMID} centos
+
+hostnamectl set-hostname FedorAnsible
+
+
+```
+
+keys
+
+```sh
+
+for VMID in {141..143};
+do
+echo "Sending key to VM: $VMID"
+scp /root/.ssh/id_rsa root@192.168.1.${VMID}:/root/.ssh
+done
+```
+
+
+
+### Install ansible
+
+https://www.simplilearn.com/tutorials/ansible-tutorial/ansible-installation
+
+```sh
+yum install dnf
+dnf update -y
+dnf -y install python
+
+yum install epel-release -y
+yum install ansible
+
+# se parar a instalação continuar da seguinte forma:
+# yum load-transaction /tmp/yum_save_tx.2023-01-30.15-01.wfXhW8.yumtx
+
+ansible --version
+
+```
+
+#### Create VG
+
+##### inventory
+
+```sh
+mkdir -pv ~/ansible/
+cat ~/ansible/inventory.yml
+VMID=141
+cat<<_EOF > ~/ansible/inventory.yml
+[mongo]
+_EOF
+
+for VMID in {141..143};
+do
+cat<<_EOF >> ~/ansible/inventory.yml
+192.168.1.${VMID}
+_EOF
+done
+cat ~/ansible/inventory.yml
+
+```
+
+entrar keys
+
+```sh
+> ~/.ssh/known_hosts
+
+for VMID in {141..143};
+do
+ssh -q root@192.168.1.${VMID} hostnamectl
+done
+
+```
+
+TEST ansible
+
+```sh
+cat<<'_EOF' > ~/ansible/test01.yml
+---
+- hosts: all
+  tasks:
+     - wait_for: host=192.168.1.101 port=22 timeout=1
+     - debug: msg=ok
+_EOF
+
+ansible-playbook -i ~/ansible/inventory.yml ~/ansible/test01.yml
+
+```
+
+```sh
+cat<<'_EOF' > ~/ansible/test02.yml
+---
+- hosts: all
+  tasks:
+
+  - name: Check if host is reachable
+    shell:
+      cmd: "/usr/bin/curl --connect-timeout 10 --silent --show-error 192.168.1.140:22"
+      warn: no
+      executable: /bin/bash 
+    register: res
+    failed_when: res.rc in [28] or res.stderr is search("No route to host")
+  
+_EOF
+
+ansible-playbook -i ~/ansible/inventory.yml ~/ansible/test02.yml
+
+
+ansible -i ~/ansible/inventory.yml mongo -m setup -a "filter=ansible_pkg_mgr"
+
+```
+
+##### vg
+
+```sh
+cat<<'_EOF' > ~/ansible/00_DISK_VG.yml
+---
+  - name: provision VG
+    hosts:
+      - mongo
+    become: yes
+    gather_facts: false
+    tasks:
+
+    - name: Install Required packages
+      yum:
+        name: '{{ packages }}'
+        state: present
+      vars:
+        packages:
+#          - python3
+          - lvm2
+_EOF
+
+ansible-playbook -i ~/ansible/inventory.yml ~/ansible/00_DISK_VG.yml
+
+```
+
+install package / Create VG
+
+```sh
+cat<<'_EOF' > ~/ansible/00_DISK_VG.yml
+---
+  - name: provision MariaDB
+    hosts:
+      - all
+    become: yes
+    gather_facts: yes
+    tasks:
+  
+    - name: Install lvm2 for VG LV binaries
+      yum:
+        name:
+          - lvm2
+        state: latest
+
+    - name: Prepare Server | Create VG
+      lvg:
+        vg: vgdata
+        pvs: /dev/sdb
+_EOF
+
+ansible-playbook -i ~/ansible/inventory.yml ~/ansible/00_DISK_VG.yml
+
+```
+
+Confirm if VG is configured properly (double check)
+
+```sh
+cat ~/ansible/inventory.yml | grep -i 192.168. | awk '{print $1}' | while read IP; do
+echo "VG present on IP: ${IP}"
+ssh -q ${IP} vgs
+done
+```
+
+Com os VG criados vamos criar os LV e os filesystems
+
+```sh
+cat<<_EOF > ~/ansible/01_DISK_LV.yml
+---
+  - name: Create logical volumes and filesystems
+    hosts: all
+    become: yes
+    vars:
+       datavg: vgdata
+       logvg: vgdata
+       rootvg: vgdata
+       mongodblv: mongodblv
+       datalv: datalv
+       datajournallv: datajournallv
+       datatmplv: datatmplv
+       db1lv: db1lv
+       mgolv: mgolv
+       loglv: loglv
+       mongod_user: mongod
+       mongod_group: mongod
+       mongod_user_ulimit: "nofile 64000"
+       mongod_group_ulimit: "nofile 64000"
+       swappiness: 1
+    tasks:
+  
+    #Create all Logical Volumes
+    - name: Create logical volume on rootvg called mongodblv
+      lvol: 
+        vg: "{{ rootvg }}" 
+        lv: "{{ mongodblv }}"
+        size: 1G
+
+    - name: Create logical volume on datavg called datalv
+      lvol: 
+        vg: "{{ datavg }}" 
+        lv: "{{ datalv }}"
+        size: 1G
+    - name: Create logical volume on datavg called datajournallv
+      lvol: 
+        vg: "{{ datavg }}" 
+        lv: "{{ datajournallv }}"
+        size: 1G
+    - name: Create logical volume on datavg called datatmplv
+      lvol: 
+        vg: "{{ datavg }}" 
+        lv: "{{ datatmplv }}"
+        size: 1G
+    - name: Create logical volume on datavg called db1lv
+      lvol: 
+        vg: "{{ datavg }}" 
+        lv: "{{ db1lv }}"
+        size: 2G
+    - name: Create logical volume on logvg called loglv
+      lvol: 
+        vg: "{{ logvg }}" 
+        lv: "{{ loglv }}"
+        size: 1G
+
+    - name: Create logical volume on datavg called mgolv
+      lvol: 
+        vg: "{{ datavg }}" 
+        lv: "{{ mgolv }}"
+        size: 1G
+
+_EOF
+
+ansible-playbook -i ~/ansible/inventory.yml ~/ansible/01_DISK_LV.yml
+
+```
+
+```yaml
+cat<<_EOF > ~/ansible/02_DISK_LV.yml
+---
+  - name: Mount the filesystems
+    hosts: all
+    become: yes
+    gather_facts: yes
+    vars:
+       datavg: vgdata
+       logvg: vgdata
+       rootvg: vgdata
+       mongodblv: mongodblv
+       mgolv: mgolv
+       datalv: datalv
+       datajournallv: datajournallv
+       datatmplv: datatmplv
+       db1lv: db1lv
+       loglv: loglv
+       mongod_user: mongod
+       mongod_group: mongod
+       mongod_user_ulimit: "nofile 64000"
+       mongod_group_ulimit: "nofile 64000"
+       swappiness: 1
+    tasks:
+
+      - name: Prepare Server | Create FS
+        filesystem:
+          fstype: xfs
+          dev: "{{ item }}"
+        loop:
+          - /dev/{{ rootvg }}/{{ mongodblv }}
+          - /dev/{{ datavg }}/{{ mgolv }}
+          - /dev/{{ datavg }}/{{ datajournallv }}
+          - /dev/{{ datavg }}/{{ datatmplv }}
+          - /dev/{{ datavg }}/{{ db1lv }}
+          - /dev/{{ logvg  }}/{{ loglv }}
+_EOF
+
+ansible-playbook -i ~/ansible/inventory.yml ~/ansible/02_DISK_LV.yml
+
+```
+
+Create user
+
+```yaml
+cat<<'_EOF' > ~/ansible/04_create_user.yml
+- name: Create mongodb user
+  hosts: all
+  become: yes
+  gather_facts: false
+  tasks:
+
+  - name: Ensure group "mongodb" exists
+    ansible.builtin.group:
+      name: mongodb
+      state: present
+
+  - name: Add the user 'mongodb' with a specific uid and a primary group of 'admin'
+    ansible.builtin.user:
+      name: mongodb
+      comment: MongoDB Admin user
+  #    uid: 1040
+      group: mongodb
+_EOF
+
+ansible-playbook -i ~/ansible/inventory.yml ~/ansible/04_create_user.yml
+
+
+```
+
+
+
+```sh
+cat<<'_EOF' > ~/ansible/03_DISK_LV.yml
+- name: test
+  hosts: all
+  become: yes
+  gather_facts: yes
+  tasks:
+  - name: Creates directories to prepare mountpoints
+    file:
+      path: "{{ item }}"
+      state: directory
+      mode: 0775
+      owner: mongodb
+      group: mongodb
+    loop:
+      - /opt/mongodb
+      - /data/mgo
+      - /data/mgo/journal
+      - /data/mgo/tmp
+      - /data/mgo/db1
+      - /log/mgo
+_EOF
+ansible-playbook -i ~/ansible/inventory.yml ~/ansible/03_DISK_LV.yml
+
+```
+
+
+
+```yml
+cat<<_EOF > ~/ansible/04_DISK_LV.yml
+---
+  - name: Mount and Permissions of the filesystem
+    hosts: all
+    become: yes
+    gather_facts: yes
+    vars:
+      datavg: vgdata
+      logvg: vgdata
+      rootvg: vgdata
+      mongodblv: mongodblv
+      mgolv: mgolv
+      datalv: datalv
+      datajournallv: datajournallv
+      datatmplv: datatmplv
+      db1lv: db1lv
+      loglv: loglv
+      mongod_user: mongodb
+      mongod_group: mongodb
+      mongod_user_ulimit: "nofile 64000"
+      mongod_group_ulimit: "nofile 64000"
+      swappiness: 1
+    tasks:
+
+      - name: Prepare Server | Add FSTab Entry And Mount
+        mount:
+          path: "{{ item.path }}"
+          src: "{{ item.src }}"
+          fstype: xfs
+          state: mounted
+        loop:
+          - path: /opt/mongodb
+            src: /dev/{{ rootvg }}/{{ mongodblv }}
+          - path: /data/mgo
+            src: /dev/{{ datavg }}/{{ mgolv }}
+          - path: /data/mgo/journal
+            src: /dev/{{ datavg }}/{{ datajournallv }}
+          - path: /data/mgo/tmp
+            src: /dev/{{ datavg }}/{{ datatmplv }}
+          - path: /data/mgo/db1
+            src: /dev/{{ datavg }}/{{ db1lv }}
+          - path: /log/mgo/
+            src: /dev/{{ logvg  }}/{{ loglv }}
+
+      # Set permission for filesystems for mongodb user
+      - name: Change permission of all those filesystem for user and group mongod:mongod
+        file:
+          path:
+            - /opt/mongodb
+            - /data/mgo
+            - /data/mgo/journal
+            - /data/mgo/tmp
+            - /data/mgo/db1
+            - /log/mgo
+          owner: "{{ mongod_user }}"
+          group: "{{ mongod_group }}"
+        
+      #Set ulimit for Mongodb User    
+      - name: Set soft ulimit for user mongod, all options unlimited and -n 64000 and -u 64000
+        lineinfile:
+          path: /etc/security/limits.conf
+          line: "{{ mongod_user }} soft nofile {{ mongod_user_ulimit }}"
+          state: present
+          
+      - name: Set hard ulimit for user mongod, all options unlimited and -n 64000 and -u 64000
+        lineinfile:
+          path: /etc/security/limits.conf
+          line: "{{ mongod_user }} hard nofile {{ mongod_user_ulimit }}"
+          state: present
+      
+      #Disable Access time on data filesystems
+      - name: Disable access time updates on /data/mgo/journal, /data/mgo/ and /data/mgo/db1
+        mount:
+          path:
+            - /data/mgo/journal
+            - /data/mgo/
+            - /data/mgo/db1
+          opts: "noatime"
+        
+      #Disable transparent HugePages - Performance Issue    
+      - name: Disable transparent hugepages
+        sysctl:
+          name: vm.transparent_hugepage
+          value: never
+        
+      #Allows to swap only if a out of memory problem happens     
+      - name: Set vm.swappiness to 1
+        sysctl:
+          name: vm.swappiness
+          value: "{{ swappiness }}"
+        
+      #Update System C Library used by Mongodb
+      - name: Update glibc
+        yum:
+          name: glibc
+          state: latest
+_EOF
+
+ansible-playbook -i ~/ansible/inventory.yml ~/ansible/03_DISK_LV.yml
+
+```
+
+
+
